@@ -1,0 +1,80 @@
+{{- if .Values.logicalBackup.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "backend-service.fullname" . }}-logical-backup
+  labels:
+    {{- include "backend-service.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.logicalBackup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 1
+  successfulJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "backend-service.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: logical-backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: backup
+            image: "{{ .Values.logicalBackup.image.repository }}:{{ .Values.logicalBackup.image.tag }}"
+            imagePullPolicy: IfNotPresent
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              # Install AWS CLI
+              apk add --no-cache aws-cli
+              
+              echo "Starting backup..."
+              TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+              FILENAME="backup-${TIMESTAMP}.sql.gz"
+              S3_PATH="s3://{{ .Values.logicalBackup.s3.bucket }}/{{ .Values.logicalBackup.s3.prefix }}${FILENAME}"
+              
+              # Determine Host
+              {{- if and .Values.postgres.enabled (empty .Values.logicalBackup.postgres.host) }}
+              PGHOST="{{ .Values.postgres.name }}-rw"
+              {{- else }}
+              PGHOST="{{ .Values.logicalBackup.postgres.host }}"
+              {{- end }}
+              
+              if [ -z "$PGHOST" ]; then
+                echo "Error: Postgres host not found"
+                exit 1
+              fi
+              
+              echo "Dumping ALL to $FILENAME..."
+              pg_dumpall -h $PGHOST -p {{ .Values.logicalBackup.postgres.port }} -U {{ .Values.logicalBackup.postgres.user }} --clean --if-exists | gzip > /tmp/$FILENAME
+              
+              echo "Uploading to $S3_PATH..."
+              aws s3 cp /tmp/$FILENAME $S3_PATH --endpoint-url {{ .Values.logicalBackup.s3.endpoint }}
+              
+              echo "Backup complete!"
+            env:
+            - name: AWS_DEFAULT_REGION
+              value: {{ .Values.logicalBackup.s3.region | quote }}
+            {{- if .Values.logicalBackup.existingSecret }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.logicalBackup.existingSecret }}
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.logicalBackup.existingSecret }}
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.logicalBackup.existingSecret }}
+                  key: PGPASSWORD
+            {{- end }}
+            resources:
+              {{- toYaml .Values.logicalBackup.resources | nindent 14 }}
+{{- end }}

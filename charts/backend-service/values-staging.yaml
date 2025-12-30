@@ -1,0 +1,13 @@
+replicaCount: 2
+
+env:
+  ENVIRONMENT: "staging"
+  LOG_LEVEL: "INFO"
+
+ingress:
+  enabled: true
+  hosts:
+    - host: staging.example.com
+      paths:
+        - path: /
+          pathType: Prefix
