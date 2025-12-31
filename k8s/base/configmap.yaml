@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-service-config
+data:
+  APP_NAME: "backend-service"
+  ENVIRONMENT: "dev"
+  LOG_LEVEL: "INFO"
+  ENABLE_TELEMETRY: "true"
+  OTLP_GRPC_ENDPOINT: "http://otel-collector:4317"

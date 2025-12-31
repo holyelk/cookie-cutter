@@ -1,0 +1,35 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- ../../base
+
+patches:
+- target:
+    kind: Deployment
+    name: backend-service
+  patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 1
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/cpu
+      value: 250m
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/memory
+      value: 256Mi
+
+- target:
+    kind: Ingress
+  patch: |-
+    - op: replace
+      path: /spec/rules/0/host
+      value: dev.example.com
+
+configMapGenerator:
+- name: backend-service-config
+  behavior: merge
+  literals:
+  - ENVIRONMENT=dev
+  - LOG_LEVEL=DEBUG
+  - ENABLE_TELEMETRY=false

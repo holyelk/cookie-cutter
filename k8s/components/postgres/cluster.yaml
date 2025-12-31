@@ -1,0 +1,23 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: backend-db
+spec:
+  instances: 3
+  storage:
+    size: 10Gi
+    storageClass: standard
+  
+  bootstrap:
+    initdb:
+      database: app
+      owner: app
+
+  # Placeholder for resources, to be patched by overlays if needed
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"

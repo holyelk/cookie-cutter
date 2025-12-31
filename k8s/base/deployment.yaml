@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend-service
+  template:
+    metadata:
+      labels:
+        app: backend-service
+    spec:
+      serviceAccountName: backend-service
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 2000
+      containers:
+      - name: backend-service
+        image: registry.gitlab.com/username/project:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: backend-service-config
+        - secretRef:
+            name: backend-service-secrets
+            optional: true
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: http
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: http
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 1000

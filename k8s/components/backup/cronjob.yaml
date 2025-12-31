@@ -1,0 +1,52 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: logical-backup
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 1
+  successfulJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/component: logical-backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: backup
+            image: postgres:16-alpine
+            imagePullPolicy: IfNotPresent
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              # Install AWS CLI
+              apk add --no-cache aws-cli
+              
+              echo "Starting backup..."
+              TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+              FILENAME="backup-${TIMESTAMP}.sql.gz"
+              S3_PATH="s3://$(BUCKET_NAME)/$(BUCKET_PREFIX)${FILENAME}"
+              
+              echo "Dumping ALL..."
+              # Env vars like PGHOST, PGUSER must be supplied via patches or envFrom
+              pg_dumpall --clean --if-exists | gzip > /tmp/$FILENAME
+              
+              echo "Uploading to $S3_PATH..."
+              aws s3 cp /tmp/$FILENAME $S3_PATH --endpoint-url $(S3_ENDPOINT)
+              
+              echo "Backup complete!"
+            env:
+            - name: BUCKET_NAME
+              value: "my-bucket"
+            - name: BUCKET_PREFIX
+              value: "backups/"
+            - name: S3_ENDPOINT
+              value: "https://s3.amazonaws.com"
+            - name: AWS_DEFAULT_REGION
+              value: "us-east-1"
+            # Creds assumed to be injected via secret patching

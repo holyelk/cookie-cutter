@@ -5,7 +5,13 @@ This is an opinionated, production-ready cookie-cutter template for building bac
 ## Repository Structure
 
 - `app/`: FastAPI application source code.
-- `charts/backend-service/`: Helm chart for deploying the application.
+
+- `app/`: FastAPI application source code.
+- `k8s/`: Kustomize configuration for Kubernetes.
+    - `base/`: Shared base resources (Deployment, Service, etc.).
+    - `components/`: Optional components (Postgres, Backup).
+    - `overlays/`: Environment-specific patches (dev, staging, prod).
+- `.gitlab-ci.yml`: CI/CD pipeline configuration.
 - `.gitlab-ci.yml`: CI/CD pipeline configuration.
 - `docker-compose.yaml`: Local development environment.
 - `Dockerfile`: Production container image definition.
@@ -45,108 +51,77 @@ The project uses `docker-compose` to mirror the production environment locally.
 
 ## Deploying to Kubernetes
 
-We use **Helm** to manage deployments. The chart is located in `charts/backend-service`.
+We use **Kustomize** to manage deployments. The configuration is located in `k8s/`.
 
 ### Prerequisites
 - A Kubernetes cluster
-- Helm 3.x installed
-- Kubectl configured
+- Kubectl installed (supports Kustomize natively)
 
 ### Deploying Manually
-To deploy to a `dev` namespace using the development values:
+To deploy to a `dev` environment:
 
 ```bash
-helm upgrade --install my-service ./charts/backend-service \
-  --namespace dev --create-namespace \
-  --values ./charts/backend-service/values.yaml \
-  --values ./charts/backend-service/values-dev.yaml
+# Preview changes
+kubectl kustomize k8s/overlays/dev
+
+# Apply changes
+kubectl apply -k k8s/overlays/dev
 ```
 
 ### Configuration
-Configuration is managed via `values.yaml` files.
+Configuration is managed via **Overlays** and **Patches**.
 
-- **`values.yaml`**: Contains shared defaults and production-ready settings.
-- **`values-dev.yaml`**: Overrides for development (lower resources, debug logging).
-- **`values-prod.yaml`**: Overrides for production (high availability, HPA enabled).
+- **`k8s/base/`**: Contains shared defaults.
+- **`k8s/overlays/dev/`**: Patches `replicas=1`, disables telemetry, uses `dev.example.com`.
+- **`k8s/overlays/prod/`**: Patches `replicas=3`, enables telemetry, enables Postgres/Backup components.
 
 **Files you are expected to edit:**
-- `app/main.py`: Add your business logic here.
-- `charts/backend-service/values.yaml`: Change image repository, resource limits, and common env vars.
-- `charts/backend-service/Chart.yaml`: Update the chart version and app version.
+- `k8s/base/deployment.yaml`: Change base image or common container settings.
+- `k8s/base/configmap.yaml`: Update shared environment variables.
+- `k8s/overlays/{env}/kustomization.yaml`: Update environment-specific patches (e.g. CPU/Memory limits).
 
 ## Features & Integrations
 
 ### Enabling PostgreSQL
-Support for **CloudNativePG** is built-in but disabled by default.
+Support for **CloudNativePG** is provided as a Kustomize Component.
 
-To enable it in production:
-1.  Open `charts/backend-service/values-prod.yaml`.
-2.  Set `postgres.enabled: true`.
+To enable it in an environment (already enabled in `prod`):
+1.  Open `k8s/overlays/{env}/kustomization.yaml`.
+2.  Uncomment `- ../../components/postgres` in the `resources` list.
 
-```yaml
-postgres:
-  enabled: true
-  instances: 3
-  storage:
-    size: 10Gi
-```
+This will deploy the `Cluster` resource defined in `k8s/components/postgres/cluster.yaml`.
 
-This will create a `Cluster` resource defined in `templates/postgres.yaml`. Ensure the CloudNativePG operator is installed in your cluster.
-
-### Standalone PostgreSQL
-This chart can be used to deploy *only* a production-ready PostgreSQL cluster (CloudNativePG) without the application.
-
-1.  **Disable the App**:
-    In `values.yaml` (or your environment override), set:
-    ```yaml
-    app:
-      enabled: false
-    ```
-
-2.  **Configure PostgreSQL**:
-    Enable postgres and configure the cluster.
-    ```yaml
-    postgres:
-      enabled: true
-      instances: 3
-      storage:
-        size: 50Gi
-      
-      # Bootstrap a new DB
-      bootstrap:
-        initdb:
-          database: mydb
-          owner: myuser
-      
-      # Enable Backups
-      backup:
-        enabled: true
-        retentionPolicy: "30d"
-        barmanObjectStore:
-           destinationPath: s3://...
-    ```
+### Enabling Logical Backups
+To enable the S3 backup CronJob:
+1.  Open `k8s/overlays/{env}/kustomization.yaml`.
+2.  Uncomment `- ../../components/backup`.
+3.  You may need to add a `configMapGenerator` or `secretGenerator` in the overlay to provide the S3 bucket details (see `k8s/components/backup/cronjob.yaml` for required env vars).
 
 ### Enabling Observability
 OpenTelemetry (OTel) is integrated directly into the app.
 
 1.  **Tracing & Metrics**:
     The app pushes traces and metrics via OTLP gRPC.
-    Configure the endpoint in `values.yaml` (under `env`):
-    ```yaml
-    env:
-      OTLP_GRPC_ENDPOINT: "http://your-otel-collector:4317"
-      ENABLE_TELEMETRY: "true"
-    ```
+    Configure the endpoint in `k8s/base/configmap.yaml` or patch it in `k8s/overlays/{env}/kustomization.yaml`.
 
 2.  **Logging**:
-    Logs are strictly structured JSON to stdout, compatible with Elastic/Logstash/Filebeat.
+    Logs are strictly structured JSON to stdout.
 
 ### CI/CD Pipeline (GitLab)
 Included `.gitlab-ci.yml` handles:
 1.  **Lint**: Checks code quality.
 2.  **Test**: Runs pytest.
 3.  **Build**: Builds Docker image and pushes to GitLab Registry.
-4.  **Deploy**: Deploys to Kubernetes using Helm.
+4.  **Deploy**: Deploys to Kubernetes using `kubectl apply -k`.
+
+**Unique Feature**: The pipeline uses `kustomize edit set image` to inject the exact image version (`$APP_VERSION`) into the manifests before applying.
+
+**How to Rollback:**
+Default `kubectl` rollbacks work for Deployments:
+```bash
+kubectl rollout undo deployment/backend-service
+```
+Note: This reverts the Pod specs, but does not revert Kustomize configmaps or other resources unless you use a more advanced GitOps controller.
 
 **Required GitLab CI Variables:**
 The pipeline assumes standard GitLab variables (`CI_REGISTRY`, etc.) are available. No manual variables are strictly required unless you need to inject secrets.
